@@ -312,7 +312,7 @@ final class QuicheQuicChannel extends AbstractChannel implements QuicChannel {
         return fin;
     }
 
-    private void handleWriteEgress() {
+    public void handleWriteEgress() {
         if (codec.inChannelRead) {
             writeEgressNeeded = true;
         } else {
@@ -370,14 +370,22 @@ final class QuicheQuicChannel extends AbstractChannel implements QuicChannel {
         return connAddr == -1;
     }
 
-    private void writeAndFlushEgress() {
-        if (writeEgress()) {
+    public void writeAndFlushEgress() {
+        writeAndFlushEgress(false);
+    }
+
+    public void writeAndFlushEgress(boolean force) {
+        if (writeEgress(force)) {
             parent().flush();
         }
     }
 
-    boolean writeEgress() {
-        if (isConnDestroyed() || !writeEgressNeeded) {
+    public boolean writeEgress() {
+        return writeEgress(false);
+    }
+
+    public boolean writeEgress(boolean force) {
+        if (isConnDestroyed() || (!writeEgressNeeded && !force)) {
             return false;
         }
         writeEgressNeeded = false;
@@ -409,6 +417,7 @@ final class QuicheQuicChannel extends AbstractChannel implements QuicChannel {
             lastFuture = parent().write(new DatagramPacket(out, remote));
         }
         if (lastFuture != null) {
+            // xxx: does it flush always? :thinking:
             lastFuture.addListener(flushListener);
             // Schedule timeout.
             // See https://docs.rs/quiche/0.6.0/quiche/#generating-outgoing-packets

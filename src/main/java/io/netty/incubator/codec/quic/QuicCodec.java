@@ -18,19 +18,25 @@ package io.netty.incubator.codec.quic;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.CharsetUtil;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Random;
 
 // TODO: - Handle connect
 public final class QuicCodec extends ChannelDuplexHandler {
@@ -57,6 +63,9 @@ public final class QuicCodec extends ChannelDuplexHandler {
 
     // Need to be accessed by the QuicheQuicChannel for now.
     boolean inChannelRead;
+
+    // xxx: this is stupid
+    private QuicheQuicChannel clientChannel;
 
     QuicCodec(long config, QuicTokenHandler tokenHandler,
               QuicConnectionIdSigner connectionSigner, ChannelHandler quicChannelHandler) {
@@ -85,7 +94,7 @@ public final class QuicCodec extends ChannelDuplexHandler {
         // Just use Unpooled as the life-time of these buffers is long.
         ByteBuf buffer = Unpooled.directBuffer(capacity);
 
-        // As we use the buffers as pointers to int etc we need to ensure we use the right oder so we will
+        // As we use the buffers as pointers to int etc we need to ensure we use the right order so we will
         // see the right value when we read primitive values.
         return PlatformDependent.BIG_ENDIAN_NATIVE_ORDER ? buffer : buffer.order(ByteOrder.LITTLE_ENDIAN);
     }
@@ -105,9 +114,51 @@ public final class QuicCodec extends ChannelDuplexHandler {
         connIdBuffer.release();
     }
 
+    private byte[] newConnectionId() {
+        final byte[] connId = new byte[Quiche.QUICHE_MAX_CONN_ID_LEN];
+        new Random().nextBytes(connId);
+        return connId;
+    }
+
+    @Override
+    public void connect(ChannelHandlerContext ctx, SocketAddress remoteAddress, SocketAddress localAddress,
+                        ChannelPromise promise) {
+        final ChannelHandler handler = quicChannelHandler;
+        final QuicCodec codec = this;
+        final ChannelPromise connectPromise = ctx.channel().newPromise();
+        ctx.connect(remoteAddress, localAddress, connectPromise);
+        connectPromise.addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture channelFuture) {
+                final ByteBuf scid = allocateNativeOrder(Quiche.QUICHE_MAX_CONN_ID_LEN);
+                scid.writeBytes(newConnectionId());
+                long conn = Quiche.quiche_connect("quic.tech", scid.memoryAddress() + scid.readerIndex(),
+                    scid.readableBytes(), config);
+                // xxx: reuse throwIfError???
+                if (conn < 0) {
+                    promise.setFailure(new RuntimeException("quiche_connect failed"));
+                } else {
+                    ctx.pipeline().addFirst(
+                        new QuicHandshakeHandler(promise, codec, conn, (InetSocketAddress) remoteAddress, handler));
+                }
+            }
+        });
+    }
+
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         DatagramPacket packet = (DatagramPacket) msg;
+
+        // xxx: well... this is as stupid as everything else
+        if (clientChannel != null) {
+            try {
+                clientChannel.recv(packet.content());
+            } finally {
+                packet.release();
+            }
+            return;
+        }
+
         try {
             ByteBuf buffer = ((DatagramPacket) msg).content();
             long contentAddress = buffer.memoryAddress() + buffer.readerIndex();
@@ -274,6 +325,15 @@ public final class QuicCodec extends ChannelDuplexHandler {
             }
         }
         ctx.fireChannelWritabilityChanged();
+    }
+
+    // xxx: this is stupid
+    public QuicheQuicChannel clientChannel() {
+        return clientChannel;
+    }
+
+    public void clientChannel(QuicheQuicChannel channel) {
+        this.clientChannel = channel;
     }
 
     private static void removeIfClosed(Iterator<?> iterator, QuicheQuicChannel current) {
