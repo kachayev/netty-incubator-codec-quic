@@ -110,17 +110,46 @@ public final class QuicClientExample {
             // it would be cool if "channel" that I get here is a `QuicChannel`
             // rather than just a `DatagramChannel`
 
+            // xxx: okay... so in the current implemention it works this way:
+            // connection promise is resolve only when handshake is already done,
+            // is it fair? is it useful?
+
             // xxx: do we want to have a single codec for client & server or different
             // codecs? some code for the client has nothing to do with server-side
             // implementation, e.g. connection, handshake, pending writes etc
+            // -- from what I've got so far, seems like having client connection handler
+            // separately from server accept is must have. even if we still want to
+            // wrap all of them into a "codec" that decides which handlers to setup
 
             // create a new stream
-            // xxx: seems like not a very smart API :(
+            // xxx: seems like not a very smart API :( or very not smart
             // not only because of werid machinery with the codec but also
             // because I can't get stream channel here. doing this in a handler
             // works... to some extent. but if i'm already using handler,
             // why can't I catch e.g. connect there?
             codec.clientChannel().connect(QuicStreamAddress.unidirectional()).sync();
+
+            // xxx: nice option for the client would be something like
+            // b.connect().sync.channel().newStream().write()
+            // ... or ...
+            // b.connect().sync.channel().connect(StreamAddress.bidirectional()).write()
+            // both options requires ability to return a new channel from
+            // the bootstrap.connect (or general notion of "child" channel???)
+
+            // xxx: it seems like binding between StreamChannel and Codec (with
+            // setting up a handler from the codec) is not always necessary for
+            // the client, there might be the case where I want all packages to
+            // be processed in a single handler (without multiplexing them into
+            // stream handlers). another question in this API... how do I create
+            // a new stream from the context of current (if i'm inside handler)
+            // would it be something like
+            // 
+            // ((QuicStreamChannel) ctx.channel()).parent().connect(StreamAddress.bidirectional())
+            //
+            // ... looks good, though what if i need a different set of handlers for 
+            // a new stream? seems like a logical thing to do if i'm trying
+            // to put all of my logic into a single connection
+
 
             // todo 2: process the response (wait, I assume)
 
